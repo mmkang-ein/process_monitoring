@@ -651,8 +651,9 @@ def show_spc_charts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
         "매우 우수": "badge-normal", "우수": "badge-info",
         "보통": "badge-warning",    "불량": "badge-critical"
     }
+    grade_css = grade_badge_map.get(cap["grade"], "")
     st.markdown(
-        f"공정능력 판정: <span class='badge {grade_badge_map.get(cap['grade'],\"\")}'>"
+        f"공정능력 판정: <span class='badge {grade_css}'>"
         f"{cap['grade']}</span>　"
         f"평균={cap['mean']:.3f}　표준편차={cap['std']:.3f}　"
         f"USL={cap['USL']}　LSL={cap['LSL']}",
