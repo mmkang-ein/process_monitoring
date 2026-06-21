@@ -486,7 +486,7 @@ def show_anomaly_alerts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
         return colors.get(val, "")
 
     st.dataframe(
-        disp.style.applymap(style_severity, subset=["심각도"]),
+        disp.style.map(style_severity, subset=["심각도"]),
         use_container_width=True, hide_index=True,
     )
 
@@ -917,7 +917,7 @@ def show_data_collection(df: pd.DataFrame):
 
     st.markdown("**📡 센서별 수집 현황**")
     st.dataframe(
-        sensor_df.style.applymap(style_status, subset=["상태"]),
+        sensor_df.style.map(style_status, subset=["상태"]),
         use_container_width=True, hide_index=True,
     )
 
