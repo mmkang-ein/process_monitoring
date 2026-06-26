@@ -49,11 +49,11 @@ VARIABLE_LABELS = {
 
 
 def generate_process_data(days: int = 30, freq_min: int = 10,
-                           seed: int = 42) -> pd.DataFrame:
+                           seed: int = 42, anomaly_ratio: float = 0.15) -> pd.DataFrame:
     """
     공정 시계열 데이터 생성
     - 3개 라인(A/B/C), 10분 간격
-    - 이상 패턴 ~15% 내장
+    - 이상 패턴 비율: anomaly_ratio (기본 15%)
     """
     np.random.seed(seed)
     end_dt   = datetime.now().replace(second=0, microsecond=0)
@@ -82,7 +82,7 @@ def generate_process_data(days: int = 30, freq_min: int = 10,
         anomaly_flags = np.zeros(n, dtype=bool)
         anomaly_types = np.array(["정상"] * n)
 
-        budget = int(n * 0.15)
+        budget = int(n * anomaly_ratio)
 
         # 패턴 1: 온도 스파이크 (급격한 상승/하강)
         n_spk = max(2, n // 180)

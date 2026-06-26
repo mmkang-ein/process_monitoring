@@ -13,6 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
+import time
 
 from data_generator import (
     generate_process_data, get_latest_snapshot,
@@ -116,11 +117,14 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; color: #e8
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
-# 데이터 로딩 (캐시)
+# 데이터 로딩 (세션 상태 기반)
 # ══════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=3600, show_spinner="데이터 생성 중…")
-def load_data():
-    return generate_process_data(days=30, freq_min=10, seed=42)
+def _init_proc_data():
+    """세션에 데이터가 없으면 기본값으로 초기화"""
+    if "proc_df" not in st.session_state:
+        st.session_state.proc_df = generate_process_data(
+            days=30, freq_min=10, seed=42, anomaly_ratio=0.15
+        )
 
 
 @st.cache_resource
@@ -150,6 +154,26 @@ def status_badge(value, ucl, lcl=None, warn_ratio=0.9):
         return '<span class="badge badge-warning">주의</span>'
     else:
         return '<span class="badge badge-normal">정상</span>'
+
+
+# ══════════════════════════════════════════════════════════════════
+# 공통 도움말 블록 (모든 페이지에서 사용)
+# ══════════════════════════════════════════════════════════════════
+def _help_block(usage: str, criteria: str, action: str):
+    st.markdown(f"""
+<div class="help-box">
+  <div class="help-title">📌 활용 방법</div>
+  <div class="help-body">{usage}</div>
+</div>
+<div class="help-box">
+  <div class="help-title">📊 판단 기준</div>
+  <div class="help-body">{criteria}</div>
+</div>
+<div class="help-box">
+  <div class="help-title">🔧 실무 적용</div>
+  <div class="help-body">{action}</div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -264,6 +288,22 @@ def show_line_status(df: pd.DataFrame):
     plotly_dark_layout(fig2, height=300)
     st.plotly_chart(fig2, use_container_width=True)
 
+    with st.expander("❓ 라인별 현황 도움말"):
+        _help_block(
+            usage="""이 화면은 A·B·C 압연라인의 실시간 공정 상태를 한눈에 보여줍니다.
+상단 KPI(가동 라인 수, 24h 이상 건수, 이상 비율, 평균 결함률)로 전체 공장 상태를 즉시 파악하고,
+각 라인 카드에서 6개 공정변수의 현재값과 정상/주의/이상 배지를 확인합니다.
+하단 차트는 라인 간 이상 유형 빈도와 최근 24h 온도 추이를 비교합니다.""",
+            criteria="""· <b>배지 기준</b>: 이상(빨강) = UCL/LCL 이탈 / 주의(노랑) = UCL의 90% 초과 / 정상(초록) = 관리 한계 이내<br>
+· <b>이상 비율</b>: 24h 기준 5% 미만 정상, 5~20% 주의, 20% 초과 긴급<br>
+· <b>온도</b>: A라인 850~950℃, B라인 840~930℃, C라인 870~960℃ 정상 범위<br>
+· <b>결함률</b>: A라인 2.0%, B라인 2.5%, C라인 1.8% 이하 유지 목표""",
+            action="""1. 매 교대조 시작 시 라인별 현황 화면 확인 → 이상(빨강) 배지 라인 우선 점검<br>
+2. 이상 비율 20% 초과 라인 → <b>이상탐지 알림</b> 메뉴로 이동하여 구체적 원인 확인<br>
+3. 온도 드리프트 패턴 발견 시 → <b>SPC 관리도</b>로 이동하여 Cpk 점수 확인 후 공정 조정<br>
+4. 차트에서 특정 이상 유형이 반복 증가 추세 → <b>설비별 위험평가</b>에서 해당 설비 점검 우선순위 확인""",
+        )
+
 
 # ══════════════════════════════════════════════════════════════════
 # 메뉴 2: 변수별 추이
@@ -373,6 +413,23 @@ def show_variable_trends(df: pd.DataFrame):
         disp = anom[["timestamp","line","anomaly_type",var_sel]].copy()
         disp.columns = ["시각","라인","이상유형", VARIABLE_LABELS[var_sel]]
         st.dataframe(disp.tail(50), use_container_width=True, hide_index=True)
+
+    with st.expander("❓ 변수별 추이 도움말"):
+        _help_block(
+            usage="""특정 라인의 단일 공정 변수(온도, 압력, 속도, 두께편차, 결함률, 진동)를 선택해
+시계열 추이와 이상 구간을 상세히 분석하는 화면입니다.
+기간(1시간~30일)을 자유롭게 변경하며 분포 히스토그램과 정상/이상 박스플롯도 함께 제공합니다.""",
+            criteria="""· <b>빨간 X 마커</b>: 이상 탐지 포인트 (라벨 기준)<br>
+· <b>UCL 빨간 점선</b>: 관리 상한 (이탈 시 즉시 확인)<br>
+· <b>LCL 노란 점선</b>: 관리 하한 (속도·온도처럼 하한도 중요한 변수에만 표시)<br>
+· <b>히스토그램</b>: 분포가 한쪽으로 치우치면 공정 편향(Offset) 발생 징후<br>
+· <b>박스플롯</b>: 이상 박스가 정상 박스 대비 크게 이탈 → 이상 변동 폭이 큼""",
+            action="""1. <b>기간 1시간</b>: 현재 발생 중인 이상의 원인 변수 실시간 추적<br>
+2. <b>기간 24시간</b>: 교대조 단위 공정 안정성 확인 (일일 보고서 참고 자료)<br>
+3. <b>기간 7일</b>: 주별 변동 패턴·드리프트 확인 (주간 미팅 준비)<br>
+4. <b>기간 30일</b>: 월간 공정 추세·계절성 분석 (월간 공정 개선 회의)<br>
+5. 이상 구간 테이블에서 특정 시간대 이상 집중 확인 → 해당 시간대 작업일지와 교차 검토""",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -490,6 +547,24 @@ def show_anomaly_alerts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
         use_container_width=True, hide_index=True,
     )
 
+    with st.expander("❓ 이상탐지 알림 도움말"):
+        _help_block(
+            usage="""Z-Score, IQR, Isolation Forest 3가지 탐지 방법 중 선택하거나
+통합 라벨 기준으로 이상 이벤트를 목록화합니다.
+타임라인 산점도로 언제·어느 라인에서 이상이 집중됐는지 확인하고,
+심각도(긴급/경고/주의) 필터로 우선순위를 정할 수 있습니다.""",
+            criteria="""· <b>긴급</b>(빨강): 온도스파이크, 결함률급증, 진동이상(베어링) → 즉시 라인 정지 검토<br>
+· <b>경고</b>(노랑): 온도드리프트, 압력급변동, 두께공차이탈 → 30분 내 원인 분석<br>
+· <b>주의</b>(파랑): 속도이상, 기타 패턴 → 교대 내 확인<br>
+· <b>이상 비율 20% 초과</b>: 설비 결함 또는 원자재 이상 가능성<br>
+· <b>Isolation Forest</b>: 단일 변수가 아닌 다변량(6개 변수 동시) 복합 이상 탐지에 적합""",
+            action="""1. 화면 진입 후 <b>라인 필터</b>로 관심 라인 선택 → <b>기간 24시간</b>으로 최신 현황 파악<br>
+2. 타임라인에서 이상 군집 구간 클릭 → 해당 시각 원인 변수 확인<br>
+3. 긴급 알림 발생 시: 현장 담당자 즉시 호출 → <b>변수별 추이</b>에서 원인 변수 특정<br>
+4. 탐지 방법 변경으로 탐지 방식 간 비교 → '통합'과 'Isolation Forest' 교차 확인으로 복합 이상 확인<br>
+5. 알림 목록 캡처 후 일일 이상보고서 첨부""",
+        )
+
 
 # ══════════════════════════════════════════════════════════════════
 # 메뉴 4: 설비별 위험평가
@@ -594,6 +669,24 @@ def show_equipment_risk(df: pd.DataFrame):
         high_risk["담당팀"]   = "설비유지보수팀"
         st.dataframe(high_risk.sort_values("위험점수", ascending=False),
                      use_container_width=True, hide_index=True)
+
+    with st.expander("❓ 설비별 위험평가 도움말"):
+        _help_block(
+            usage="""압연기(메인롤), 권취기, 구동모터, 냉각장치, 가열로 5개 설비를 대상으로
+각 라인별 위험점수(0~10)를 계산해 히트맵으로 표시합니다.
+이상 비율, 진동 수준, 결함률, 온도 이탈을 종합한 복합 점수이며,
+일별 추이 차트로 위험 변화 흐름을 파악할 수 있습니다.""",
+            criteria="""· <b>HIGH (7 이상)</b>: 즉시 점검 및 예방 정비 — 생산 중단 위험<br>
+· <b>MEDIUM (4~7)</b>: 계획 정비 주기 앞당기기 검토<br>
+· <b>LOW (4 미만)</b>: 정기 점검 유지<br>
+· <b>히트맵 색상</b>: 빨강(위험) → 노랑(주의) → 초록(안전)<br>
+· 위험점수 = 이상비율×3.5 + 진동비율×2.5 + 결함률비율×2.5 + 온도이탈비율×1.5""",
+            action="""1. <b>최근 24h 기준</b>: 현재 진행 중인 위험 파악 → 즉시 정비 대상 식별<br>
+2. <b>7일 기준</b>: 주별 설비 상태 추이 → 주간 정비 계획 수립<br>
+3. <b>30일 기준</b>: 월간 설비 건전성 평가 → 연간 정비 예산 근거 자료<br>
+4. HIGH 등급 설비 목록 출력 → 설비팀에 즉시 공유 및 조치계획 수립<br>
+5. 일별 추이에서 특정 설비 위험점수 상승 패턴 → 예측 정비(PdM) 스케줄 조정""",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -732,6 +825,24 @@ def show_spc_charts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
 - **서브그룹 크기 n=5** 기준 A₂=0.577 적용
         """)
 
+    with st.expander("❓ SPC 관리도 도움말"):
+        _help_block(
+            usage="""X-bar(평균) 관리도와 R(범위) 관리도를 표시하여 공정의 통계적 안정성을 판정합니다.
+Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
+서브그룹 크기(n=3~10) 변경으로 다양한 분석 조건을 적용할 수 있습니다.""",
+            criteria="""· <b>Cpk ≥ 1.67</b>: 매우 우수 (6σ 수준, 불량률 0.1ppm 이하)<br>
+· <b>1.33 ≤ Cpk &lt; 1.67</b>: 우수 (63ppm 이하)<br>
+· <b>1.00 ≤ Cpk &lt; 1.33</b>: 보통 (최소 허용 수준, 2,700ppm)<br>
+· <b>Cpk &lt; 1.00</b>: 불량 (즉시 공정 개선 필요)<br>
+· <b>OOC(Out of Control)</b>: 관리 한계선 이탈 포인트 → 특수 원인 조사<br>
+· <b>8점 연속 중심선 한쪽</b>: 드리프트/편향 징후 (Nelson 규칙 적용 권장)""",
+            action="""1. 변수 선택 → X-bar 차트에서 OOC 포인트 확인 → 해당 시간대 <b>변수별 추이</b>에서 원인 분석<br>
+2. Cpk &lt; 1.00: 공정 파라미터 조정(온도 설정값, 압력 조정) 후 재측정<br>
+3. R 관리도 OOC: 변동 원인 분석 (작업자 변경, 원자재 로트 변경, 설비 마모)<br>
+4. <b>월 단위</b>: 전월 대비 Cpk 추이 → 공정 개선 효과 검증<br>
+5. <b>분기 단위</b>: 라인 간 Cpk 비교 → 표준화 작업 우선순위 결정""",
+        )
+
 
 # ══════════════════════════════════════════════════════════════════
 # 메뉴 6: 결함 트렌드
@@ -842,6 +953,24 @@ def show_defect_trends(df: pd.DataFrame):
         fig_hm.update_layout(title="날짜 × 시간대 결함률 히트맵 (전 라인 평균)")
         plotly_dark_layout(fig_hm, height=min(400, max(200, len(pivot_d) * 18)))
         st.plotly_chart(fig_hm, use_container_width=True)
+
+    with st.expander("❓ 결함 트렌드 도움말"):
+        _help_block(
+            usage="""표면 결함률의 시계열 추이, 라인 간 비교, 온도와의 상관관계,
+시간대별 발생 히트맵을 종합 제공합니다.
+결함률 급증 이벤트 목록으로 고위험 구간을 빠르게 식별합니다.""",
+            criteria="""· <b>결함률 한계</b>: A라인 2.0%, B라인 2.5%, C라인 1.8% 초과 → 즉시 대응<br>
+· <b>히트맵</b>: 빨간 구간(높은 결함률) 시간대 → 조업 조건 재검토<br>
+· <b>온도 상관 산점도</b>: 온도 편차와 결함률의 양의 상관 → 가열로 제어 정밀도 점검<br>
+· <b>24h 기준</b>: 당일 품질 관리 (QC 리포트)<br>
+· <b>7일 기준</b>: 주간 품질 경향 분석<br>
+· <b>30일 기준</b>: 월간 품질 성과 평가 (고객사 보고)""",
+            action="""1. 교대조 종료 전 24h 기준 결함 트렌드 확인 → QC 일일 보고서 작성<br>
+2. 결함률 급증 이벤트 발생 시: 해당 라인의 <b>이상탐지 알림</b>에서 동시 발생 이상 확인<br>
+3. 히트맵에서 특정 시간대 결함 집중 → 해당 시간대 작업자/원자재 이력 확인<br>
+4. 온도-결함률 상관이 강한 라인 → 가열로 PID 파라미터 조정 검토<br>
+5. <b>월간</b>: 전월 대비 결함률 개선/악화 원인 분석 → 공정 개선 보고서 작성""",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -960,6 +1089,23 @@ client.loop_forever()
 ```
         """)
 
+    with st.expander("❓ 데이터 수집 도움말"):
+        _help_block(
+            usage="""각 라인·센서별 데이터 수집 현황(수집건수, 결측건, 품질%)을 모니터링합니다.
+수집 간격 분포 차트로 데이터 연속성을 확인하고,
+센서 이상이나 통신 장애를 조기에 감지합니다.""",
+            criteria="""· <b>데이터 품질 99% 이상</b>: 정상<br>
+· <b>97~99%</b>: 주의 → 결측 원인 파악<br>
+· <b>97% 미만</b>: 점검 필요 → 센서 교체 또는 통신 점검<br>
+· <b>수집 간격 분포</b>: 10분 간격(설정값) 이외 긴 간격 → 연결 단절 이력 확인<br>
+· <b>마지막 수신 시각</b>이 10분 이상 경과 → 통신 장애 의심""",
+            action="""1. 매일 1회 데이터 수집 화면 점검 → '점검필요' 센서 즉시 현장 확인<br>
+2. 결측건 급증 센서 → 배선·커넥터 불량 또는 PLC 통신 오류 점검<br>
+3. 수집 간격 분포에서 장시간 공백 구간 → 해당 시간 데이터 분석 제외 후 보완 계획 수립<br>
+4. 운영 단계 전환 시: OPC-UA/MQTT 연동 구성 후 실시간 데이터로 교체<br>
+5. 품질 임계치 미달 센서 현황을 주간 설비 미팅 보고서에 포함""",
+        )
+
 
 # ══════════════════════════════════════════════════════════════════
 # 메뉴 8: 도움말
@@ -973,26 +1119,9 @@ def show_help():
         "데이터 수집", "시스템 개요",
     ])
 
-    # ── 헬퍼: 3단 도움말 박스 ────────────────────────────────────
-    def help_block(usage, criteria, action):
-        st.markdown(f"""
-<div class="help-box">
-  <div class="help-title">📌 활용 방법</div>
-  <div class="help-body">{usage}</div>
-</div>
-<div class="help-box">
-  <div class="help-title">📊 판단 기준</div>
-  <div class="help-body">{criteria}</div>
-</div>
-<div class="help-box">
-  <div class="help-title">🔧 실무 적용</div>
-  <div class="help-body">{action}</div>
-</div>
-""", unsafe_allow_html=True)
-
     # ── 탭 1: 라인별 현황 ─────────────────────────────────────────
     with help_tabs[0]:
-        help_block(
+        _help_block(
             usage="""이 화면은 A·B·C 압연라인의 실시간 공정 상태를 한눈에 보여줍니다.
 상단 KPI(가동 라인 수, 24h 이상 건수, 이상 비율, 평균 결함률)로 전체 공장 상태를 즉시 파악하고,
 각 라인 카드에서 6개 공정변수의 현재값과 정상/주의/이상 배지를 확인합니다.
@@ -1009,7 +1138,7 @@ def show_help():
 
     # ── 탭 2: 변수별 추이 ─────────────────────────────────────────
     with help_tabs[1]:
-        help_block(
+        _help_block(
             usage="""특정 라인의 단일 공정 변수(온도, 압력, 속도, 두께편차, 결함률, 진동)를 선택해
 시계열 추이와 이상 구간을 상세히 분석하는 화면입니다.
 기간(1시간~30일)을 자유롭게 변경하며 분포 히스토그램과 정상/이상 박스플롯도 함께 제공합니다.""",
@@ -1027,7 +1156,7 @@ def show_help():
 
     # ── 탭 3: 이상탐지 알림 ──────────────────────────────────────
     with help_tabs[2]:
-        help_block(
+        _help_block(
             usage="""Z-Score, IQR, Isolation Forest 3가지 탐지 방법 중 선택하거나
 통합 라벨 기준으로 이상 이벤트를 목록화합니다.
 타임라인 산점도로 언제·어느 라인에서 이상이 집중됐는지 확인하고,
@@ -1046,7 +1175,7 @@ def show_help():
 
     # ── 탭 4: 설비별 위험평가 ─────────────────────────────────────
     with help_tabs[3]:
-        help_block(
+        _help_block(
             usage="""압연기, 권취기, 구동모터, 냉각장치, 가열로 5개 설비를 대상으로
 각 라인별 위험점수(0~10)를 계산해 히트맵으로 표시합니다.
 이상 비율, 진동 수준, 결함률, 온도 이탈을 종합한 복합 점수이며,
@@ -1065,7 +1194,7 @@ def show_help():
 
     # ── 탭 5: SPC 관리도 ─────────────────────────────────────────
     with help_tabs[4]:
-        help_block(
+        _help_block(
             usage="""X-bar(평균) 관리도와 R(범위) 관리도를 표시하여 공정의 통계적 안정성을 판정합니다.
 Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 서브그룹 크기(n=3~10) 변경으로 다양한 분석 조건을 적용할 수 있습니다.""",
@@ -1085,7 +1214,7 @@ Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 
     # ── 탭 6: 결함 트렌드 ─────────────────────────────────────────
     with help_tabs[5]:
-        help_block(
+        _help_block(
             usage="""표면 결함률의 시계열 추이, 라인 간 비교, 온도와의 상관관계,
 시간대별 발생 히트맵을 종합 제공합니다.
 결함률 급증 이벤트 목록으로 고위험 구간을 빠르게 식별합니다.""",
@@ -1104,7 +1233,7 @@ Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 
     # ── 탭 7: 데이터 수집 ─────────────────────────────────────────
     with help_tabs[6]:
-        help_block(
+        _help_block(
             usage="""각 라인·센서별 데이터 수집 현황(수집건수, 결측건, 품질%)을 모니터링합니다.
 수집 간격 분포 차트로 데이터 연속성을 확인하고,
 센서 이상이나 통신 장애를 조기에 감지합니다.""",
@@ -1173,7 +1302,8 @@ process_monitoring/
 # 사이드바 & 라우팅
 # ══════════════════════════════════════════════════════════════════
 def main():
-    df     = load_data()
+    _init_proc_data()
+    df     = st.session_state.proc_df
     engine = get_engine()
 
     # ── 사이드바 ─────────────────────────────────────────────────
@@ -1213,6 +1343,77 @@ def main():
             "🔌 데이터 수집",
             "❓ 도움말",
         ], label_visibility="collapsed")
+
+        st.markdown("---")
+
+        # ── 샘플 데이터 생성 ─────────────────────────────────────
+        st.markdown('<div class="sidebar-title">샘플 데이터 생성</div>', unsafe_allow_html=True)
+        _GEN_PERIODS = ["최근 1개월", "최근 3개월 (분기)", "최근 6개월", "최근 12개월 (연간)"]
+        _PERIOD_DAYS = {"최근 1개월": 30, "최근 3개월 (분기)": 90,
+                        "최근 6개월": 180, "최근 12개월 (연간)": 365}
+        _gen_period = st.selectbox(
+            "📅 모니터링 기간", _GEN_PERIODS,
+            index=st.session_state.get("proc_gen_period_idx", 0),
+            key="proc_gen_period_sel",
+        )
+        _gen_lines = st.number_input(
+            "🏭 가동 라인 수", min_value=1, max_value=3,
+            value=int(st.session_state.get("proc_gen_lines_val", 3)), step=1,
+            key="proc_gen_lines_inp",
+            help="1=A라인 / 2=A+B라인 / 3=전 라인(A·B·C)",
+        )
+        _gen_anomaly = st.slider(
+            "⚠️ 이상 패턴 비율 (%)", min_value=0, max_value=40,
+            value=int(st.session_state.get("proc_gen_anomaly_val", 15)), step=5,
+            key="proc_gen_anomaly_sl",
+        )
+        if st.button("⚡ 데이터 생성", use_container_width=True,
+                     type="primary", key="btn_proc_gen"):
+            _new_seed   = int(time.time() * 1000) % 999983
+            _days       = _PERIOD_DAYS[_gen_period]
+            _aratio     = _gen_anomaly / 100.0
+            _all_lines  = list(LINE_CONFIG.keys())
+            _active     = _all_lines[:_gen_lines]
+            _new_df = generate_process_data(
+                days=_days, freq_min=10, seed=_new_seed, anomaly_ratio=_aratio
+            )
+            _new_df = _new_df[_new_df["line"].isin(_active)].reset_index(drop=True)
+            st.session_state.proc_df             = _new_df
+            st.session_state.proc_gen_time       = datetime.now().strftime("%m/%d %H:%M:%S")
+            st.session_state.proc_gen_period_idx = _GEN_PERIODS.index(_gen_period)
+            st.session_state.proc_gen_lines_val  = _gen_lines
+            st.session_state.proc_gen_anomaly_val = _gen_anomaly
+            st.session_state.proc_seed           = _new_seed
+            st.success(
+                f"생성 완료  ·  {_gen_period}  ·  {_gen_lines}개 라인  ·  이상 {_gen_anomaly}%"
+            )
+            st.rerun()
+
+        _gt   = st.session_state.get("proc_gen_time", "초기 데이터")
+        _gp   = _GEN_PERIODS[st.session_state.get("proc_gen_period_idx", 0)]
+        _gl   = st.session_state.get("proc_gen_lines_val", 3)
+        _ga   = st.session_state.get("proc_gen_anomaly_val", 15)
+        st.markdown(f"""<div style="background:#0a1628;border:1px solid #1e3a5c;
+border-radius:8px;padding:8px 12px;margin-top:6px;font-size:10px;color:#4a6a8a">
+최근 생성: {_gt}<br>{_gp} · {_gl}개 라인 · 이상 {_ga}%</div>""",
+                    unsafe_allow_html=True)
+
+        with st.expander("❓ 데이터 생성 도움말"):
+            _help_block(
+                usage="""사이드바에서 모니터링 기간, 가동 라인 수, 이상 패턴 비율을 설정한 뒤
+<b>⚡ 데이터 생성</b> 버튼을 클릭하면 새로운 압연 공정 시뮬레이션 데이터가 생성되어
+전체 대시보드(라인 현황, 변수 추이, 이상탐지 등 모든 화면)에 즉시 반영됩니다.""",
+                criteria="""· <b>모니터링 기간</b>: 1개월(데모/단기) ~ 12개월(연간 추세 분석) 선택<br>
+· <b>가동 라인 수</b>: 1=A라인 가동 / 2=A+B라인 / 3=전 라인(A·B·C 동시 운영)<br>
+· <b>이상 패턴 비율 0%</b>: 정상 공정 기준선 학습용 데이터<br>
+· <b>이상 패턴 비율 15%</b>: 실제 압연 공정 평균 이상 발생률에 근접한 기본값<br>
+· <b>이상 패턴 비율 30~40%</b>: 공정 불안정 또는 설비 노후화 시나리오 시뮬레이션""",
+                action="""1. 교육·시연용: 이상 비율 30~40%로 설정 → 이상탐지 알림, SPC 관리도 이탈 시나리오 확인<br>
+2. 정상 기준선 설정: 이상 비율 0%로 생성 → 정상 공정 Cpk, 결함률 기준값 확인<br>
+3. 라인 신설 시나리오: 가동 라인 수 1→3으로 단계 증가 → 라인 추가에 따른 관리 복잡도 시뮬레이션<br>
+4. 연간 분석: 기간 12개월 + 이상 비율 15% → 설비 노후화 드리프트 패턴 확인<br>
+5. 데이터 재생성 후 반드시 <b>라인별 현황</b> 화면에서 KPI 변화 확인""",
+            )
 
         st.markdown("---")
 
