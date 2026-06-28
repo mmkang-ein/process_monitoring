@@ -18,8 +18,14 @@ import time
 from data_generator import (
     generate_process_data, get_latest_snapshot,
     get_recent, get_anomaly_summary, LINE_CONFIG, VARIABLE_LABELS,
+    generate_line_config, LINE_COLORS,
 )
 from anomaly_engine import ProcessAnomalyEngine, calc_risk_score, PROCESS_FEATURES
+
+# 모듈 레벨 상수 (callback에서도 접근 가능)
+_GEN_PERIODS = ["최근 1개월", "최근 3개월 (분기)", "최근 6개월", "최근 12개월 (연간)"]
+_PERIOD_DAYS = {"최근 1개월": 30, "최근 3개월 (분기)": 90,
+                "최근 6개월": 180, "최근 12개월 (연간)": 365}
 
 # ══════════════════════════════════════════════════════════════════
 # 페이지 설정
@@ -73,12 +79,8 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; color: #e8
     content: '';
     position: absolute; top: 0; left: 0; right: 0; height: 3px;
     border-radius: 14px 14px 0 0;
+    background: var(--card-accent, #00d4ff);
 }
-.pm-card.cyan::before   { background: linear-gradient(90deg,#00d4ff,#0097b2); }
-.pm-card.purple::before { background: linear-gradient(90deg,#7c3aed,#4f46e5); }
-.pm-card.green::before  { background: linear-gradient(90deg,#10b981,#059669); }
-.pm-card.amber::before  { background: linear-gradient(90deg,#f59e0b,#d97706); }
-.pm-card.red::before    { background: linear-gradient(90deg,#ef4444,#dc2626); }
 
 /* ── 배지 ── */
 .badge {
@@ -121,9 +123,12 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; color: #e8
 # ══════════════════════════════════════════════════════════════════
 def _init_proc_data():
     """세션에 데이터가 없으면 기본값으로 초기화"""
+    if "line_config" not in st.session_state:
+        st.session_state.line_config = generate_line_config(3)
     if "proc_df" not in st.session_state:
         st.session_state.proc_df = generate_process_data(
-            days=30, freq_min=10, seed=42, anomaly_ratio=0.15
+            days=30, freq_min=10, seed=42, anomaly_ratio=0.15,
+            line_config=st.session_state.line_config,
         )
 
 
@@ -182,7 +187,8 @@ def _help_block(usage: str, criteria: str, action: str):
 def show_line_status(df: pd.DataFrame):
     st.markdown('<div class="section-header">🏭 라인별 현황</div>', unsafe_allow_html=True)
 
-    snap = get_latest_snapshot(df)
+    line_cfg  = st.session_state.get("line_config", LINE_CONFIG)
+    snap      = get_latest_snapshot(df)
     recent_24h = get_recent(df, hours=24)
 
     # ── KPI 요약 (전체) ──────────────────────────────────────────
@@ -219,19 +225,19 @@ def show_line_status(df: pd.DataFrame):
     # ── 라인별 상세 카드 ─────────────────────────────────────────
     for _, row in snap.iterrows():
         line = row["line"]
-        cfg  = LINE_CONFIG[line]
+        cfg  = line_cfg.get(line, list(line_cfg.values())[0])
+        line_color  = cfg["color"]
         line_recent = recent_24h[recent_24h["line"] == line]
         anom_cnt    = line_recent["is_anomaly"].sum()
         anom_rate   = anom_cnt / len(line_recent) * 100 if len(line_recent) > 0 else 0
 
-        color_class = {"A라인": "cyan", "B라인": "purple", "C라인": "green"}[line]
         badge_temp  = status_badge(row["temperature"], cfg["temp_ucl"], cfg["temp_lcl"])
         badge_press = status_badge(row["pressure"],    cfg["pressure_ucl"], cfg["pressure_lcl"])
         badge_vib   = status_badge(row["vibration"],   cfg["vibration_ucl"])
         badge_def   = status_badge(row["defect_rate"], cfg["defect_limit"])
 
         st.markdown(f"""
-        <div class="pm-card {color_class}">
+        <div class="pm-card" style="--card-accent:{line_color}">
           <b style="font-size:17px;color:#ffffff">{line}</b>
           &nbsp;&nbsp;<span style="font-size:12px;color:#7a9cc0">
             최근 데이터: {row['timestamp'].strftime('%Y-%m-%d %H:%M') if hasattr(row['timestamp'], 'strftime') else row['timestamp']}
@@ -265,10 +271,11 @@ def show_line_status(df: pd.DataFrame):
 
     recent_7d = get_recent(df, hours=168)
     summ = get_anomaly_summary(recent_7d)
+    color_map = {n: c["color"] for n, c in line_cfg.items()}
     if not summ.empty:
         fig = px.bar(summ, x="anomaly_type", y="count", color="line",
                      barmode="group",
-                     color_discrete_map={"A라인":"#00d4ff","B라인":"#7c3aed","C라인":"#10b981"},
+                     color_discrete_map=color_map,
                      labels={"anomaly_type":"이상 유형","count":"발생 횟수","line":"라인"})
         plotly_dark_layout(fig, height=340)
         st.plotly_chart(fig, use_container_width=True)
@@ -277,27 +284,25 @@ def show_line_status(df: pd.DataFrame):
     st.markdown('<div class="section-header">🌡️ 압연 온도 추이 비교 (최근 24h)</div>',
                 unsafe_allow_html=True)
     fig2 = go.Figure()
-    colors = {"A라인":"#00d4ff","B라인":"#7c3aed","C라인":"#10b981"}
     for line in df["line"].unique():
+        line_color = line_cfg.get(line, {}).get("color", "#00d4ff")
         sub = recent_24h[recent_24h["line"] == line]
         fig2.add_trace(go.Scatter(
             x=sub["timestamp"], y=sub["temperature"],
             mode="lines", name=line,
-            line=dict(color=colors[line], width=1.5),
+            line=dict(color=line_color, width=1.5),
         ))
     plotly_dark_layout(fig2, height=300)
     st.plotly_chart(fig2, use_container_width=True)
 
     with st.expander("❓ 라인별 현황 도움말"):
         _help_block(
-            usage="""이 화면은 A·B·C 압연라인의 실시간 공정 상태를 한눈에 보여줍니다.
+            usage="""이 화면은 각 압연라인의 실시간 공정 상태를 한눈에 보여줍니다.
 상단 KPI(가동 라인 수, 24h 이상 건수, 이상 비율, 평균 결함률)로 전체 공장 상태를 즉시 파악하고,
 각 라인 카드에서 6개 공정변수의 현재값과 정상/주의/이상 배지를 확인합니다.
 하단 차트는 라인 간 이상 유형 빈도와 최근 24h 온도 추이를 비교합니다.""",
             criteria="""· <b>배지 기준</b>: 이상(빨강) = UCL/LCL 이탈 / 주의(노랑) = UCL의 90% 초과 / 정상(초록) = 관리 한계 이내<br>
-· <b>이상 비율</b>: 24h 기준 5% 미만 정상, 5~20% 주의, 20% 초과 긴급<br>
-· <b>온도</b>: A라인 850~950℃, B라인 840~930℃, C라인 870~960℃ 정상 범위<br>
-· <b>결함률</b>: A라인 2.0%, B라인 2.5%, C라인 1.8% 이하 유지 목표""",
+· <b>이상 비율</b>: 24h 기준 5% 미만 정상, 5~20% 주의, 20% 초과 긴급""",
             action="""1. 매 교대조 시작 시 라인별 현황 화면 확인 → 이상(빨강) 배지 라인 우선 점검<br>
 2. 이상 비율 20% 초과 라인 → <b>이상탐지 알림</b> 메뉴로 이동하여 구체적 원인 확인<br>
 3. 온도 드리프트 패턴 발견 시 → <b>SPC 관리도</b>로 이동하여 Cpk 점수 확인 후 공정 조정<br>
@@ -311,9 +316,11 @@ def show_line_status(df: pd.DataFrame):
 def show_variable_trends(df: pd.DataFrame):
     st.markdown('<div class="section-header">📈 변수별 추이 분석</div>', unsafe_allow_html=True)
 
+    line_cfg = st.session_state.get("line_config", LINE_CONFIG)
+
     col_sel, col_var, col_period = st.columns([1, 1, 1])
     with col_sel:
-        line_sel = st.selectbox("라인 선택", list(LINE_CONFIG.keys()))
+        line_sel = st.selectbox("라인 선택", list(line_cfg.keys()))
     with col_var:
         var_sel = st.selectbox("변수 선택",
                                list(VARIABLE_LABELS.keys()),
@@ -323,7 +330,7 @@ def show_variable_trends(df: pd.DataFrame):
         period_sel = st.selectbox("기간", list(period_map.keys()), index=3)
     hours = period_map[period_sel]
 
-    cfg  = LINE_CONFIG[line_sel]
+    cfg  = line_cfg[line_sel]
     sub  = get_recent(df[df["line"] == line_sel], hours=hours)
 
     if sub.empty:
@@ -396,7 +403,6 @@ def show_variable_trends(df: pd.DataFrame):
         plotly_dark_layout(fig_h, height=300)
         st.plotly_chart(fig_h, use_container_width=True)
     with c2:
-        # Box plot per anomaly_type
         sub_box = sub.copy()
         sub_box["상태"] = sub_box["is_anomaly"].map({True: "이상", False: "정상"})
         fig_b = px.box(sub_box, x="상태", y=var_sel,
@@ -438,11 +444,13 @@ def show_variable_trends(df: pd.DataFrame):
 def show_anomaly_alerts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
     st.markdown('<div class="section-header">🚨 이상탐지 알림</div>', unsafe_allow_html=True)
 
+    line_cfg = st.session_state.get("line_config", LINE_CONFIG)
+    all_lines = list(line_cfg.keys())
+
     # 필터
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
-        line_filter = st.multiselect("라인 필터", list(LINE_CONFIG.keys()),
-                                      default=list(LINE_CONFIG.keys()))
+        line_filter = st.multiselect("라인 필터", all_lines, default=all_lines)
     with c2:
         period_h = st.selectbox("기간", {"24시간": 24, "3일": 72, "7일": 168}.keys())
         hour_map = {"24시간": 24, "3일": 72, "7일": 168}
@@ -456,7 +464,6 @@ def show_anomaly_alerts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
     if method_sel == "통합(라벨)":
         anom_df = recent[recent["is_anomaly"]].copy()
     else:
-        # 엔진 실행
         method_map = {"Z-Score":"zscore_temp","IQR":"iqr_pressure","Isolation Forest":"iso_forest"}
         key = method_map[method_sel]
         results_all = []
@@ -572,6 +579,8 @@ def show_anomaly_alerts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
 def show_equipment_risk(df: pd.DataFrame):
     st.markdown('<div class="section-header">⚠️ 설비별 위험평가</div>', unsafe_allow_html=True)
 
+    line_cfg = st.session_state.get("line_config", LINE_CONFIG)
+
     period_h = st.selectbox("평가 기간", {"최근 24h": 24, "최근 7일": 168, "최근 30일": 720}.keys())
     hour_map = {"최근 24h": 24, "최근 7일": 168, "최근 30일": 720}
     hours = hour_map[period_h]
@@ -581,11 +590,10 @@ def show_equipment_risk(df: pd.DataFrame):
     risk_rows = []
     equip_list = ["압연기(메인롤)", "권취기", "구동모터", "냉각장치", "가열로"]
     np.random.seed(99)
-    for line, cfg in LINE_CONFIG.items():
+    for line, cfg in line_cfg.items():
         sub = recent[recent["line"] == line]
         base_score = calc_risk_score(sub, cfg)
         for equip in equip_list:
-            # 설비별 미세 변동 (시뮬)
             eq_score = round(min(10.0, max(0.0,
                 base_score + np.random.uniform(-1.5, 2.0))), 2)
             if eq_score >= 7:   level, color = "HIGH",   "#ef4444"
@@ -637,8 +645,8 @@ def show_equipment_risk(df: pd.DataFrame):
                                df["timestamp"].max(), freq="1D")
     np.random.seed(77)
     fig_t = go.Figure()
-    line_colors = {"A라인":"#00d4ff","B라인":"#7c3aed","C라인":"#10b981"}
-    for line, cfg in LINE_CONFIG.items():
+    for line, cfg in line_cfg.items():
+        line_color = cfg["color"]
         sub = df[df["line"] == line]
         daily_scores = []
         for day in days_range:
@@ -648,7 +656,7 @@ def show_equipment_risk(df: pd.DataFrame):
         fig_t.add_trace(go.Scatter(
             x=days_range, y=daily_scores,
             mode="lines+markers", name=line,
-            line=dict(color=line_colors[line], width=2),
+            line=dict(color=line_color, width=2),
             marker=dict(size=5),
         ))
     fig_t.add_hline(y=7, line_dash="dash", line_color="#ef4444",
@@ -695,9 +703,11 @@ def show_equipment_risk(df: pd.DataFrame):
 def show_spc_charts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
     st.markdown('<div class="section-header">📐 SPC 관리도 / Cp·Cpk</div>', unsafe_allow_html=True)
 
+    line_cfg = st.session_state.get("line_config", LINE_CONFIG)
+
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
-        line_sel = st.selectbox("라인", list(LINE_CONFIG.keys()), key="spc_line")
+        line_sel = st.selectbox("라인", list(line_cfg.keys()), key="spc_line")
     with c2:
         var_opt = {
             "압연 온도(℃)": ("temperature", "temp_ucl", "temp_lcl"),
@@ -709,7 +719,7 @@ def show_spc_charts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
     with c3:
         n_sub = st.selectbox("서브그룹 크기", [3, 4, 5, 6, 7, 8], index=2, key="spc_n")
 
-    cfg = LINE_CONFIG[line_sel]
+    cfg = line_cfg[line_sel]
     col_name, ucl_key, lcl_key = var_opt[var_disp]
     usl = cfg[ucl_key] if isinstance(ucl_key, str) else ucl_key
     lsl = cfg[lcl_key] if isinstance(lcl_key, str) and lcl_key else (lcl_key if lcl_key else 0.0)
@@ -762,7 +772,6 @@ def show_spc_charts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
         x=x_idx, y=spc["x_bars"], mode="lines+markers", name="X̄",
         line=dict(color="#3b82f6", width=1.5), marker=dict(size=5),
     ))
-    # OOC 포인트
     ooc_idx = [i+1 for i, v in enumerate(spc["OOC_x"]) if v]
     ooc_val = [spc["x_bars"][i] for i, v in enumerate(spc["OOC_x"]) if v]
     if ooc_idx:
@@ -810,7 +819,6 @@ def show_spc_charts(df: pd.DataFrame, engine: ProcessAnomalyEngine):
     plotly_dark_layout(fig_r, height=320)
     st.plotly_chart(fig_r, use_container_width=True)
 
-    # ── 설명 박스 ─────────────────────────────────────────────────
     with st.expander("📖 SPC 관리도 해석 기준"):
         st.markdown("""
 | 지수 | 기준 | 판정 |
@@ -850,6 +858,8 @@ Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 def show_defect_trends(df: pd.DataFrame):
     st.markdown('<div class="section-header">🔍 결함 트렌드</div>', unsafe_allow_html=True)
 
+    line_cfg = st.session_state.get("line_config", LINE_CONFIG)
+
     period_h = st.selectbox("분석 기간",
                              {"24시간": 24, "7일": 168, "30일": 720}.keys(),
                              index=1, key="defect_period")
@@ -883,18 +893,18 @@ def show_defect_trends(df: pd.DataFrame):
     st.markdown("---")
 
     # ── 라인별 결함률 추이 ───────────────────────────────────────
-    colors = {"A라인":"#00d4ff","B라인":"#7c3aed","C라인":"#10b981"}
+    colors = {n: c["color"] for n, c in line_cfg.items()}
     fig = go.Figure()
-    for line, cfg in LINE_CONFIG.items():
+    for line, cfg in line_cfg.items():
         sub = recent[recent["line"] == line]
-        # 1시간 rolling 평균
+        if sub.empty:
+            continue
         sub_r = sub.set_index("timestamp")["defect_rate"].resample("1h").mean().reset_index()
         fig.add_trace(go.Scatter(
             x=sub_r["timestamp"], y=sub_r["defect_rate"],
             mode="lines", name=line,
             line=dict(color=colors[line], width=2),
         ))
-        # 관리 한계선
         fig.add_hline(y=cfg["defect_limit"],
                       line_dash="dot", line_color=colors[line],
                       opacity=0.5,
@@ -959,7 +969,7 @@ def show_defect_trends(df: pd.DataFrame):
             usage="""표면 결함률의 시계열 추이, 라인 간 비교, 온도와의 상관관계,
 시간대별 발생 히트맵을 종합 제공합니다.
 결함률 급증 이벤트 목록으로 고위험 구간을 빠르게 식별합니다.""",
-            criteria="""· <b>결함률 한계</b>: A라인 2.0%, B라인 2.5%, C라인 1.8% 초과 → 즉시 대응<br>
+            criteria="""· <b>결함률 한계</b>: 라인별 한계치(관리 기준) 초과 → 즉시 대응<br>
 · <b>히트맵</b>: 빨간 구간(높은 결함률) 시간대 → 조업 조건 재검토<br>
 · <b>온도 상관 산점도</b>: 온도 편차와 결함률의 양의 상관 → 가열로 제어 정밀도 점검<br>
 · <b>24h 기준</b>: 당일 품질 관리 (QC 리포트)<br>
@@ -980,6 +990,8 @@ def show_data_collection(df: pd.DataFrame):
     st.markdown('<div class="section-header">🔌 데이터 수집 / 센서 연동 관리</div>',
                 unsafe_allow_html=True)
 
+    line_cfg = st.session_state.get("line_config", LINE_CONFIG)
+
     # ── 센서 현황 테이블 (시뮬) ──────────────────────────────────
     np.random.seed(55)
     sensor_data = []
@@ -991,7 +1003,7 @@ def show_data_collection(df: pd.DataFrame):
         "defect_rate": "표면 비전 카메라",
         "vibration":   "가속도계(MEMS)",
     }
-    for line in LINE_CONFIG.keys():
+    for line in line_cfg.keys():
         for var, sensor in sensor_names.items():
             total = len(df[df["line"] == line])
             missing = int(total * np.random.uniform(0.0, 0.005))
@@ -1053,14 +1065,14 @@ def show_data_collection(df: pd.DataFrame):
     # ── 데이터 수집 간격 분포 ────────────────────────────────────
     st.markdown("---")
     st.markdown("**⏱️ 수집 간격 분포 (분)**")
-    for line in LINE_CONFIG.keys():
+    for line in line_cfg.keys():
         sub = df[df["line"] == line]["timestamp"].sort_values()
         gaps = sub.diff().dt.total_seconds().div(60).dropna()
         if not gaps.empty:
             fig_g = px.histogram(gaps, nbins=20,
                                  title=f"{line} 수집 간격 분포",
                                  labels={"value":"수집 간격(분)"},
-                                 color_discrete_sequence=[LINE_CONFIG[line]["color"]])
+                                 color_discrete_sequence=[line_cfg[line]["color"]])
             plotly_dark_layout(fig_g, height=220)
             st.plotly_chart(fig_g, use_container_width=True)
 
@@ -1119,24 +1131,20 @@ def show_help():
         "데이터 수집", "시스템 개요",
     ])
 
-    # ── 탭 1: 라인별 현황 ─────────────────────────────────────────
     with help_tabs[0]:
         _help_block(
-            usage="""이 화면은 A·B·C 압연라인의 실시간 공정 상태를 한눈에 보여줍니다.
+            usage="""이 화면은 각 압연라인의 실시간 공정 상태를 한눈에 보여줍니다.
 상단 KPI(가동 라인 수, 24h 이상 건수, 이상 비율, 평균 결함률)로 전체 공장 상태를 즉시 파악하고,
 각 라인 카드에서 6개 공정변수의 현재값과 정상/주의/이상 배지를 확인합니다.
 하단 차트는 라인 간 이상 유형 빈도와 최근 24h 온도 추이를 비교합니다.""",
             criteria="""· <b>배지 기준</b>: 이상(빨강) = UCL/LCL 이탈 / 주의(노랑) = UCL의 90% 초과 / 정상(초록) = 관리 한계 이내<br>
-· <b>이상 비율</b>: 24h 기준 5% 미만 정상, 5~20% 주의, 20% 초과 긴급<br>
-· <b>온도</b>: A라인 850~950℃, B라인 840~930℃, C라인 870~960℃ 정상 범위<br>
-· <b>결함률</b>: A라인 2.0%, B라인 2.5%, C라인 1.8% 이하 유지 목표""",
+· <b>이상 비율</b>: 24h 기준 5% 미만 정상, 5~20% 주의, 20% 초과 긴급""",
             action="""1. 매 교대조 시작 시 라인별 현황 화면 확인 → 이상(빨강) 배지 라인 우선 점검<br>
 2. 이상 비율 20% 초과 라인 → <b>이상탐지 알림</b> 메뉴로 이동하여 구체적 원인 확인<br>
 3. 온도 드리프트 패턴 발견 시 → <b>SPC 관리도</b>로 이동하여 Cpk 점수 확인 후 공정 조정<br>
 4. 차트에서 특정 이상 유형이 반복 증가 추세 → <b>설비별 위험평가</b>에서 해당 설비 점검 우선순위 확인""",
         )
 
-    # ── 탭 2: 변수별 추이 ─────────────────────────────────────────
     with help_tabs[1]:
         _help_block(
             usage="""특정 라인의 단일 공정 변수(온도, 압력, 속도, 두께편차, 결함률, 진동)를 선택해
@@ -1154,7 +1162,6 @@ def show_help():
 5. 이상 구간 테이블에서 특정 시간대 이상 집중 확인 → 해당 시간대 작업일지와 교차 검토""",
         )
 
-    # ── 탭 3: 이상탐지 알림 ──────────────────────────────────────
     with help_tabs[2]:
         _help_block(
             usage="""Z-Score, IQR, Isolation Forest 3가지 탐지 방법 중 선택하거나
@@ -1173,7 +1180,6 @@ def show_help():
 5. 알림 목록 엑셀 캡처 후 일일 이상보고서 첨부""",
         )
 
-    # ── 탭 4: 설비별 위험평가 ─────────────────────────────────────
     with help_tabs[3]:
         _help_block(
             usage="""압연기, 권취기, 구동모터, 냉각장치, 가열로 5개 설비를 대상으로
@@ -1192,7 +1198,6 @@ def show_help():
 5. 일별 추이에서 특정 설비 위험점수 상승 패턴 → 예측 정비(PdM) 스케줄 조정""",
         )
 
-    # ── 탭 5: SPC 관리도 ─────────────────────────────────────────
     with help_tabs[4]:
         _help_block(
             usage="""X-bar(평균) 관리도와 R(범위) 관리도를 표시하여 공정의 통계적 안정성을 판정합니다.
@@ -1208,17 +1213,15 @@ Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 2. Cpk < 1.00: 공정 파라미터 조정(온도 설정값, 압력 조정) 후 재측정<br>
 3. R 관리도 OOC: 변동 원인 분석 (작업자 변경, 원자재 로트 변경, 설비 마모)<br>
 4. <b>월 단위</b>: 전월 대비 Cpk 추이 → 공정 개선 효과 검증<br>
-5. <b>분기 단위</b>: 라인 간 Cpk 비교 → 표준화 작업 우선순위 결정<br>
-6. <b>연간</b>: 연간 Cpk 목표 달성 여부 평가 → 다음 연도 품질 목표 수립""",
+5. <b>분기 단위</b>: 라인 간 Cpk 비교 → 표준화 작업 우선순위 결정""",
         )
 
-    # ── 탭 6: 결함 트렌드 ─────────────────────────────────────────
     with help_tabs[5]:
         _help_block(
             usage="""표면 결함률의 시계열 추이, 라인 간 비교, 온도와의 상관관계,
 시간대별 발생 히트맵을 종합 제공합니다.
 결함률 급증 이벤트 목록으로 고위험 구간을 빠르게 식별합니다.""",
-            criteria="""· <b>결함률 한계</b>: A라인 2.0%, B라인 2.5%, C라인 1.8% 초과 → 즉시 대응<br>
+            criteria="""· <b>결함률 한계</b>: 라인별 한계치 초과 → 즉시 대응<br>
 · <b>히트맵</b>: 빨간 구간(높은 결함률) 시간대 → 조업 조건 재검토<br>
 · <b>온도 상관 산점도</b>: 온도 편차와 결함률의 양의 상관 → 가열로 제어 정밀도 점검<br>
 · <b>24h 기준</b>: 당일 품질 관리 (QC 리포트)<br>
@@ -1231,7 +1234,6 @@ Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 5. <b>월간</b>: 전월 대비 결함률 개선/악화 원인 분석 → 공정 개선 보고서 작성""",
         )
 
-    # ── 탭 7: 데이터 수집 ─────────────────────────────────────────
     with help_tabs[6]:
         _help_block(
             usage="""각 라인·센서별 데이터 수집 현황(수집건수, 결측건, 품질%)을 모니터링합니다.
@@ -1249,10 +1251,9 @@ Cp/Cpk 공정능력지수로 규격 대비 공정 여유를 수치화하며,
 5. 품질 임계치 미달 센서 현황을 주간 설비 미팅 보고서에 포함""",
         )
 
-    # ── 탭 8: 시스템 개요 ─────────────────────────────────────────
     with help_tabs[7]:
         st.markdown("""
-<div class="pm-card cyan">
+<div class="pm-card" style="--card-accent:#00d4ff">
 <b style="font-size:16px;color:#ffffff">공정제어 상시모니터링 시스템 v1.0</b><br>
 <span style="color:#7a9cc0">철강/금속 압연·코일 생산라인 이상탐지 및 SPC 관리 플랫폼</span>
 </div>
@@ -1289,7 +1290,7 @@ process_monitoring/
 ```
 
 **🚀 확장 로드맵**
-1. **데모** (현재): 샘플 데이터, Streamlit Cloud 배포
+1. **데모** (현재): 샘플 데이터, 1~10개 라인 동적 설정
 2. **파일럿**: OPC-UA/MQTT 실시간 연동
 3. **운영**: PLC 직접 연동, 알림(이메일/SMS)
 4. **고도화**: 예측 정비(PdM), AI 불량 원인 분류
@@ -1303,8 +1304,6 @@ process_monitoring/
 # ══════════════════════════════════════════════════════════════════
 def main():
     _init_proc_data()
-    df     = st.session_state.proc_df
-    engine = get_engine()
 
     # ── 사이드바 ─────────────────────────────────────────────────
     with st.sidebar:
@@ -1321,9 +1320,11 @@ def main():
 <hr style="border-color:#1e3a5c;margin:8px 0 16px 0">
 """, unsafe_allow_html=True)
 
+        df_cur = st.session_state.proc_df
+
         # 데이터 기간 표시
-        data_start = df["timestamp"].min().strftime("%Y-%m-%d")
-        data_end   = df["timestamp"].max().strftime("%Y-%m-%d %H:%M")
+        data_start = df_cur["timestamp"].min().strftime("%Y-%m-%d")
+        data_end   = df_cur["timestamp"].max().strftime("%Y-%m-%d %H:%M")
         st.markdown(f"""
 <div style="background:#0a1628;border:1px solid #1e3a5c;border-radius:8px;padding:10px 14px;margin-bottom:16px">
   <div style="font-size:10px;color:#4a6a8a;margin-bottom:2px">데이터 기간</div>
@@ -1348,19 +1349,16 @@ def main():
 
         # ── 샘플 데이터 생성 ─────────────────────────────────────
         st.markdown('<div class="sidebar-title">샘플 데이터 생성</div>', unsafe_allow_html=True)
-        _GEN_PERIODS = ["최근 1개월", "최근 3개월 (분기)", "최근 6개월", "최근 12개월 (연간)"]
-        _PERIOD_DAYS = {"최근 1개월": 30, "최근 3개월 (분기)": 90,
-                        "최근 6개월": 180, "최근 12개월 (연간)": 365}
         _gen_period = st.selectbox(
             "📅 모니터링 기간", _GEN_PERIODS,
             index=st.session_state.get("proc_gen_period_idx", 0),
             key="proc_gen_period_sel",
         )
-        _gen_lines = st.number_input(
-            "🏭 가동 라인 수", min_value=1, max_value=3,
+        _gen_lines = st.slider(
+            "🏭 가동 라인 수", min_value=1, max_value=10,
             value=int(st.session_state.get("proc_gen_lines_val", 3)), step=1,
-            key="proc_gen_lines_inp",
-            help="1=A라인 / 2=A+B라인 / 3=전 라인(A·B·C)",
+            key="proc_gen_lines_sl",
+            help="라인 수 조절 시 샘플 데이터 및 대시보드 즉시 반영 (Line-1 ~ Line-N 자동 명명)",
         )
         _gen_anomaly = st.slider(
             "⚠️ 이상 패턴 비율 (%)", min_value=0, max_value=40,
@@ -1372,18 +1370,19 @@ def main():
             _new_seed   = int(time.time() * 1000) % 999983
             _days       = _PERIOD_DAYS[_gen_period]
             _aratio     = _gen_anomaly / 100.0
-            _all_lines  = list(LINE_CONFIG.keys())
-            _active     = _all_lines[:_gen_lines]
-            _new_df = generate_process_data(
-                days=_days, freq_min=10, seed=_new_seed, anomaly_ratio=_aratio
+            _new_cfg    = generate_line_config(_gen_lines)
+            _new_df     = generate_process_data(
+                days=_days, freq_min=10, seed=_new_seed, anomaly_ratio=_aratio,
+                line_config=_new_cfg,
             )
-            _new_df = _new_df[_new_df["line"].isin(_active)].reset_index(drop=True)
-            st.session_state.proc_df             = _new_df
-            st.session_state.proc_gen_time       = datetime.now().strftime("%m/%d %H:%M:%S")
-            st.session_state.proc_gen_period_idx = _GEN_PERIODS.index(_gen_period)
-            st.session_state.proc_gen_lines_val  = _gen_lines
+            st.session_state.proc_df              = _new_df
+            st.session_state.line_config          = _new_cfg
+            st.session_state.proc_gen_time        = datetime.now().strftime("%m/%d %H:%M:%S")
+            st.session_state.proc_gen_period_idx  = _GEN_PERIODS.index(_gen_period)
+            st.session_state.proc_gen_lines_val   = _gen_lines
             st.session_state.proc_gen_anomaly_val = _gen_anomaly
-            st.session_state.proc_seed           = _new_seed
+            st.session_state.proc_seed            = _new_seed
+            st.session_state.proc_n_lines_prev    = _gen_lines
             st.success(
                 f"생성 완료  ·  {_gen_period}  ·  {_gen_lines}개 라인  ·  이상 {_gen_anomaly}%"
             )
@@ -1402,15 +1401,16 @@ border-radius:8px;padding:8px 12px;margin-top:6px;font-size:10px;color:#4a6a8a">
             _help_block(
                 usage="""사이드바에서 모니터링 기간, 가동 라인 수, 이상 패턴 비율을 설정한 뒤
 <b>⚡ 데이터 생성</b> 버튼을 클릭하면 새로운 압연 공정 시뮬레이션 데이터가 생성되어
-전체 대시보드(라인 현황, 변수 추이, 이상탐지 등 모든 화면)에 즉시 반영됩니다.""",
+전체 대시보드(라인 현황, 변수 추이, 이상탐지 등 모든 화면)에 즉시 반영됩니다.<br>
+가동 라인 수 슬라이더를 조절하면 버튼 클릭 없이도 즉시 반영됩니다.""",
                 criteria="""· <b>모니터링 기간</b>: 1개월(데모/단기) ~ 12개월(연간 추세 분석) 선택<br>
-· <b>가동 라인 수</b>: 1=A라인 가동 / 2=A+B라인 / 3=전 라인(A·B·C 동시 운영)<br>
+· <b>가동 라인 수</b>: 1개~10개 자유 설정 (Line-1 ~ Line-N 자동 명명)<br>
 · <b>이상 패턴 비율 0%</b>: 정상 공정 기준선 학습용 데이터<br>
 · <b>이상 패턴 비율 15%</b>: 실제 압연 공정 평균 이상 발생률에 근접한 기본값<br>
 · <b>이상 패턴 비율 30~40%</b>: 공정 불안정 또는 설비 노후화 시나리오 시뮬레이션""",
                 action="""1. 교육·시연용: 이상 비율 30~40%로 설정 → 이상탐지 알림, SPC 관리도 이탈 시나리오 확인<br>
 2. 정상 기준선 설정: 이상 비율 0%로 생성 → 정상 공정 Cpk, 결함률 기준값 확인<br>
-3. 라인 신설 시나리오: 가동 라인 수 1→3으로 단계 증가 → 라인 추가에 따른 관리 복잡도 시뮬레이션<br>
+3. 라인 신설 시나리오: 가동 라인 수 슬라이더 조절 → 라인 추가에 따른 관리 복잡도 시뮬레이션<br>
 4. 연간 분석: 기간 12개월 + 이상 비율 15% → 설비 노후화 드리프트 패턴 확인<br>
 5. 데이터 재생성 후 반드시 <b>라인별 현황</b> 화면에서 KPI 변화 확인""",
             )
@@ -1419,10 +1419,11 @@ border-radius:8px;padding:8px 12px;margin-top:6px;font-size:10px;color:#4a6a8a">
 
         # 라인별 최신 상태 요약
         st.markdown('<div class="sidebar-title">라인 상태</div>', unsafe_allow_html=True)
-        snap = get_latest_snapshot(df)
+        line_cfg_sb = st.session_state.get("line_config", LINE_CONFIG)
+        snap = get_latest_snapshot(df_cur)
         for _, row in snap.iterrows():
             line = row["line"]
-            cfg  = LINE_CONFIG[line]
+            cfg  = line_cfg_sb.get(line, list(line_cfg_sb.values())[0])
             is_anom = (row["temperature"] > cfg["temp_ucl"] or
                        row["temperature"] < cfg["temp_lcl"] or
                        row["vibration"] > cfg["vibration_ucl"] or
@@ -1434,10 +1435,29 @@ border-radius:8px;padding:8px 12px;margin-top:6px;font-size:10px;color:#4a6a8a">
             )
 
         st.markdown("---")
+        n_active = df_cur["line"].nunique()
         st.markdown(f"""<div style="font-size:10px;color:#3a5a7a;text-align:center">
-            총 {len(df):,}건 · 3개 라인<br>
-            이상 {df['is_anomaly'].sum():,}건 ({df['is_anomaly'].mean()*100:.1f}%)
+            총 {len(df_cur):,}건 · {n_active}개 라인<br>
+            이상 {df_cur['is_anomaly'].sum():,}건 ({df_cur['is_anomaly'].mean()*100:.1f}%)
         </div>""", unsafe_allow_html=True)
+
+    # ── 슬라이더 변경 시 즉시 데이터 재생성 ─────────────────────
+    prev_n = st.session_state.get("proc_n_lines_prev", 3)
+    if _gen_lines != prev_n:
+        _new_cfg = generate_line_config(_gen_lines)
+        _days    = _PERIOD_DAYS[_GEN_PERIODS[st.session_state.get("proc_gen_period_idx", 0)]]
+        _aratio  = st.session_state.get("proc_gen_anomaly_val", 15) / 100.0
+        _seed    = st.session_state.get("proc_seed", 42)
+        st.session_state.line_config         = _new_cfg
+        st.session_state.proc_df             = generate_process_data(
+            days=_days, freq_min=10, seed=_seed, anomaly_ratio=_aratio,
+            line_config=_new_cfg,
+        )
+        st.session_state.proc_gen_lines_val  = _gen_lines
+        st.session_state.proc_n_lines_prev   = _gen_lines
+
+    df     = st.session_state.proc_df
+    engine = get_engine()
 
     # ── 메뉴 라우팅 ──────────────────────────────────────────────
     if   "라인별 현황"    in menu: show_line_status(df)

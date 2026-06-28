@@ -7,36 +7,97 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-# ── 라인별 공정 기준값 ─────────────────────────────────────────
-LINE_CONFIG = {
-    "A라인": {
-        "temp_nominal": 900, "temp_ucl": 950, "temp_lcl": 850,
-        "pressure_nominal": 280, "pressure_ucl": 315, "pressure_lcl": 245,
-        "speed_nominal": 45.0, "speed_ucl": 54, "speed_lcl": 36,
-        "thickness_nominal": 3.00, "thickness_tol": 0.08,
-        "defect_nominal": 0.80, "defect_limit": 2.0,
-        "vibration_nominal": 12.0, "vibration_ucl": 20.0,
-        "color": "#00d4ff",
-    },
-    "B라인": {
-        "temp_nominal": 880, "temp_ucl": 930, "temp_lcl": 840,
-        "pressure_nominal": 320, "pressure_ucl": 360, "pressure_lcl": 285,
-        "speed_nominal": 38.0, "speed_ucl": 47, "speed_lcl": 30,
-        "thickness_nominal": 4.50, "thickness_tol": 0.10,
-        "defect_nominal": 1.00, "defect_limit": 2.5,
-        "vibration_nominal": 14.0, "vibration_ucl": 24.0,
-        "color": "#7c3aed",
-    },
-    "C라인": {
-        "temp_nominal": 920, "temp_ucl": 960, "temp_lcl": 870,
-        "pressure_nominal": 260, "pressure_ucl": 295, "pressure_lcl": 228,
-        "speed_nominal": 55.0, "speed_ucl": 65, "speed_lcl": 45,
-        "thickness_nominal": 2.00, "thickness_tol": 0.05,
-        "defect_nominal": 0.60, "defect_limit": 1.8,
-        "vibration_nominal": 10.0, "vibration_ucl": 18.0,
-        "color": "#10b981",
-    },
-}
+# ── 라인 색상 팔레트 (최대 10개) ──────────────────────────────
+LINE_COLORS = [
+    "#00d4ff",  # Line-1
+    "#7c3aed",  # Line-2
+    "#10b981",  # Line-3
+    "#f59e0b",  # Line-4
+    "#ef4444",  # Line-5
+    "#f472b6",  # Line-6
+    "#fb923c",  # Line-7
+    "#a3e635",  # Line-8
+    "#38bdf8",  # Line-9
+    "#c084fc",  # Line-10
+]
+
+# ── 라인 공정 기준값 템플릿 (10종) ────────────────────────────
+_LINE_TEMPLATES = [
+    {"temp_nominal": 900, "temp_ucl": 950, "temp_lcl": 850,
+     "pressure_nominal": 280, "pressure_ucl": 315, "pressure_lcl": 245,
+     "speed_nominal": 45.0, "speed_ucl": 54, "speed_lcl": 36,
+     "thickness_nominal": 3.00, "thickness_tol": 0.08,
+     "defect_nominal": 0.80, "defect_limit": 2.0,
+     "vibration_nominal": 12.0, "vibration_ucl": 20.0},
+    {"temp_nominal": 880, "temp_ucl": 930, "temp_lcl": 840,
+     "pressure_nominal": 320, "pressure_ucl": 360, "pressure_lcl": 285,
+     "speed_nominal": 38.0, "speed_ucl": 47, "speed_lcl": 30,
+     "thickness_nominal": 4.50, "thickness_tol": 0.10,
+     "defect_nominal": 1.00, "defect_limit": 2.5,
+     "vibration_nominal": 14.0, "vibration_ucl": 24.0},
+    {"temp_nominal": 920, "temp_ucl": 960, "temp_lcl": 870,
+     "pressure_nominal": 260, "pressure_ucl": 295, "pressure_lcl": 228,
+     "speed_nominal": 55.0, "speed_ucl": 65, "speed_lcl": 45,
+     "thickness_nominal": 2.00, "thickness_tol": 0.05,
+     "defect_nominal": 0.60, "defect_limit": 1.8,
+     "vibration_nominal": 10.0, "vibration_ucl": 18.0},
+    {"temp_nominal": 895, "temp_ucl": 945, "temp_lcl": 845,
+     "pressure_nominal": 300, "pressure_ucl": 335, "pressure_lcl": 265,
+     "speed_nominal": 42.0, "speed_ucl": 51, "speed_lcl": 33,
+     "thickness_nominal": 3.50, "thickness_tol": 0.09,
+     "defect_nominal": 0.90, "defect_limit": 2.2,
+     "vibration_nominal": 13.0, "vibration_ucl": 22.0},
+    {"temp_nominal": 910, "temp_ucl": 955, "temp_lcl": 860,
+     "pressure_nominal": 275, "pressure_ucl": 310, "pressure_lcl": 240,
+     "speed_nominal": 50.0, "speed_ucl": 60, "speed_lcl": 40,
+     "thickness_nominal": 2.50, "thickness_tol": 0.07,
+     "defect_nominal": 0.70, "defect_limit": 1.9,
+     "vibration_nominal": 11.0, "vibration_ucl": 19.0},
+    {"temp_nominal": 870, "temp_ucl": 920, "temp_lcl": 830,
+     "pressure_nominal": 340, "pressure_ucl": 380, "pressure_lcl": 300,
+     "speed_nominal": 35.0, "speed_ucl": 44, "speed_lcl": 28,
+     "thickness_nominal": 5.00, "thickness_tol": 0.12,
+     "defect_nominal": 1.10, "defect_limit": 2.8,
+     "vibration_nominal": 15.0, "vibration_ucl": 26.0},
+    {"temp_nominal": 930, "temp_ucl": 970, "temp_lcl": 880,
+     "pressure_nominal": 250, "pressure_ucl": 285, "pressure_lcl": 218,
+     "speed_nominal": 60.0, "speed_ucl": 70, "speed_lcl": 50,
+     "thickness_nominal": 1.80, "thickness_tol": 0.04,
+     "defect_nominal": 0.55, "defect_limit": 1.6,
+     "vibration_nominal": 9.0,  "vibration_ucl": 16.0},
+    {"temp_nominal": 905, "temp_ucl": 948, "temp_lcl": 855,
+     "pressure_nominal": 290, "pressure_ucl": 325, "pressure_lcl": 255,
+     "speed_nominal": 47.0, "speed_ucl": 56, "speed_lcl": 38,
+     "thickness_nominal": 3.20, "thickness_tol": 0.08,
+     "defect_nominal": 0.85, "defect_limit": 2.1,
+     "vibration_nominal": 12.5, "vibration_ucl": 21.0},
+    {"temp_nominal": 885, "temp_ucl": 935, "temp_lcl": 845,
+     "pressure_nominal": 310, "pressure_ucl": 348, "pressure_lcl": 274,
+     "speed_nominal": 40.0, "speed_ucl": 49, "speed_lcl": 32,
+     "thickness_nominal": 4.00, "thickness_tol": 0.09,
+     "defect_nominal": 0.95, "defect_limit": 2.4,
+     "vibration_nominal": 13.5, "vibration_ucl": 23.0},
+    {"temp_nominal": 915, "temp_ucl": 958, "temp_lcl": 865,
+     "pressure_nominal": 270, "pressure_ucl": 305, "pressure_lcl": 235,
+     "speed_nominal": 52.0, "speed_ucl": 62, "speed_lcl": 42,
+     "thickness_nominal": 2.80, "thickness_tol": 0.06,
+     "defect_nominal": 0.75, "defect_limit": 2.0,
+     "vibration_nominal": 11.5, "vibration_ucl": 20.5},
+]
+
+
+def generate_line_config(n_lines: int) -> dict:
+    """n_lines 개의 라인 설정 딕셔너리 생성 (Line-1 ~ Line-N 자동 명명)"""
+    configs = {}
+    for i in range(n_lines):
+        name = f"Line-{i + 1}"
+        tmpl = _LINE_TEMPLATES[i % len(_LINE_TEMPLATES)]
+        configs[name] = {**tmpl, "color": LINE_COLORS[i % len(LINE_COLORS)]}
+    return configs
+
+
+# 기본 설정 (하위 호환성 유지, 3개 라인)
+LINE_CONFIG = generate_line_config(3)
 
 VARIABLE_LABELS = {
     "temperature":    "압연 온도(℃)",
@@ -49,12 +110,16 @@ VARIABLE_LABELS = {
 
 
 def generate_process_data(days: int = 30, freq_min: int = 10,
-                           seed: int = 42, anomaly_ratio: float = 0.15) -> pd.DataFrame:
+                           seed: int = 42, anomaly_ratio: float = 0.15,
+                           line_config: dict = None) -> pd.DataFrame:
     """
     공정 시계열 데이터 생성
-    - 3개 라인(A/B/C), 10분 간격
+    - line_config 개수만큼 라인 (Line-1 ~ Line-N), 10분 간격
     - 이상 패턴 비율: anomaly_ratio (기본 15%)
     """
+    if line_config is None:
+        line_config = LINE_CONFIG
+
     np.random.seed(seed)
     end_dt   = datetime.now().replace(second=0, microsecond=0)
     start_dt = end_dt - timedelta(days=days)
@@ -62,7 +127,7 @@ def generate_process_data(days: int = 30, freq_min: int = 10,
     n = len(timestamps)
 
     records = []
-    for line, cfg in LINE_CONFIG.items():
+    for line, cfg in line_config.items():
         t_sigma  = (cfg["temp_ucl"]      - cfg["temp_lcl"])      * 0.035
         p_sigma  = (cfg["pressure_ucl"]  - cfg["pressure_lcl"])  * 0.035
         s_sigma  = (cfg["speed_ucl"]     - cfg["speed_lcl"])     * 0.035
@@ -71,20 +136,19 @@ def generate_process_data(days: int = 30, freq_min: int = 10,
         v_sigma  = cfg["vibration_ucl"]  * 0.04
 
         # 기저 시계열 (완만한 사인파 drift 포함)
-        t_base  = np.array([cfg["temp_nominal"]     + t_sigma  * np.random.randn()
+        t_base  = np.array([cfg["temp_nominal"]      + t_sigma  * np.random.randn()
                              + 4 * np.sin(2 * np.pi * i / (6 * 24)) for i in range(n)])
-        p_base  = np.array([cfg["pressure_nominal"] + p_sigma  * np.random.randn() for _ in range(n)])
-        s_base  = np.array([cfg["speed_nominal"]    + s_sigma  * np.random.randn() for _ in range(n)])
-        th_base = np.array([cfg["thickness_nominal"]+ th_sigma * np.random.randn() for _ in range(n)])
+        p_base  = np.array([cfg["pressure_nominal"]  + p_sigma  * np.random.randn() for _ in range(n)])
+        s_base  = np.array([cfg["speed_nominal"]     + s_sigma  * np.random.randn() for _ in range(n)])
+        th_base = np.array([cfg["thickness_nominal"] + th_sigma * np.random.randn() for _ in range(n)])
         d_base  = np.abs(np.array([cfg["defect_nominal"] + d_sigma * np.random.randn() for _ in range(n)]))
-        v_base  = np.array([cfg["vibration_nominal"]+ v_sigma  * np.random.randn() for _ in range(n)])
+        v_base  = np.array([cfg["vibration_nominal"] + v_sigma  * np.random.randn() for _ in range(n)])
 
         anomaly_flags = np.zeros(n, dtype=bool)
         anomaly_types = np.array(["정상"] * n)
-
         budget = int(n * anomaly_ratio)
 
-        # 패턴 1: 온도 스파이크 (급격한 상승/하강)
+        # 패턴 1: 온도 스파이크
         n_spk = max(2, n // 180)
         spike_pos = np.random.choice(n - 4, size=n_spk, replace=False)
         for pos in spike_pos:
@@ -124,7 +188,6 @@ def generate_process_data(days: int = 30, freq_min: int = 10,
             anomaly_flags[st_pos:st_pos+st_len] = True
             anomaly_types[st_pos:st_pos+st_len] = "속도이상(정지)"
             budget -= st_len
-            # 재기동 후 급가속
             acc_pos = st_pos + st_len
             acc_len = min(3, n - acc_pos, budget)
             if acc_len > 0:
@@ -160,7 +223,7 @@ def generate_process_data(days: int = 30, freq_min: int = 10,
             anomaly_types[pos:pos+span] = "결함률급증"
             budget -= span
 
-        # 패턴 7: 진동 베어링 이상 (점진 증가 → 스파이크)
+        # 패턴 7: 진동 베어링 이상
         if budget > 15:
             v_start = np.random.randint(2 * n // 3, n - n // 6)
             v_len   = min(n // 9, n - v_start, budget)
@@ -170,21 +233,20 @@ def generate_process_data(days: int = 30, freq_min: int = 10,
             anomaly_types[v_start:v_start+v_len] = "진동이상(베어링)"
             budget -= v_len
 
-        # 두께편차 → 절대값 편차
         th_dev = np.abs(th_base - cfg["thickness_nominal"])
 
         for i, ts in enumerate(timestamps):
             records.append({
-                "timestamp":    ts,
-                "line":         line,
-                "temperature":  round(float(t_base[i]), 1),
-                "pressure":     round(float(p_base[i]), 1),
-                "speed":        round(float(s_base[i]), 1),
-                "thickness_dev":round(float(th_dev[i]), 4),
-                "defect_rate":  round(max(0.0, float(d_base[i])), 3),
-                "vibration":    round(float(v_base[i]), 2),
-                "is_anomaly":   bool(anomaly_flags[i]),
-                "anomaly_type": str(anomaly_types[i]),
+                "timestamp":     ts,
+                "line":          line,
+                "temperature":   round(float(t_base[i]),  1),
+                "pressure":      round(float(p_base[i]),  1),
+                "speed":         round(float(s_base[i]),  1),
+                "thickness_dev": round(float(th_dev[i]),  4),
+                "defect_rate":   round(max(0.0, float(d_base[i])), 3),
+                "vibration":     round(float(v_base[i]),  2),
+                "is_anomaly":    bool(anomaly_flags[i]),
+                "anomaly_type":  str(anomaly_types[i]),
             })
 
     df = (pd.DataFrame(records)
